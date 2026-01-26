@@ -27,7 +27,7 @@ jobs:
       # Extract the archive into repo root
       - name: Extract bus temp.7z
         run: |
-          7z x "bus temp.7z" -o./
+          7z x "HoldableTemplate.7z" -o./
 
       # Commit and push only if there are changes
       - name: Commit and push extracted files
