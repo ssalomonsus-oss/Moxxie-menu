@@ -1,101 +1,190 @@
-name: Build libmoxxie.so (arm64-v8a)
+name: Build libmoxxie.so (arm64-v8a) — ensure Dobby populated
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-arm64:
+    name: Build libmoxxie (arm64-v8a)
     runs-on: ubuntu-latest
 
     env:
-      ANDROID_API_LEVEL: 27
-      ANDROID_NDK_VERSION: 26.1.10909125
-      CMAKE_VERSION: 3.22.1
-      JAVA_VERSION: 17
+      ANDROID_NDK_VERSION: "26.1.10909125"
+      ANDROID_API_LEVEL: "27"
+      CMAKE_VERSION: "3.22.1"
+      JAVA_VERSION: "17"
 
     steps:
-      # --------------------------------------------------
-      # Checkout (NO submodules — they do NOT exist in repo)
-      # --------------------------------------------------
-      - name: Checkout repository
+      - name: Checkout repository (no auto submodules)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # --------------------------------------------------
-      # Ensure Dobby source exists (manual vendor clone)
-      # --------------------------------------------------
-      - name: Ensure Dobby dependency
+      - name: Safely init submodules that have URLs
         run: |
           set -e
-          DOBBY_DIR=app/src/main/cpp/extern/Dobby
-
-          if [ ! -f "$DOBBY_DIR/CMakeLists.txt" ]; then
-            echo "Dobby missing — cloning"
-            rm -rf "$DOBBY_DIR"
-            git clone --depth=1 https://github.com/jmpews/Dobby.git "$DOBBY_DIR"
+          if [ -f .gitmodules ]; then
+            echo ".gitmodules found — enumerating submodule paths and URLs..."
+            git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$' \
+              | while read -r key path; do
+                name=$(echo "$key" | sed -E 's/^submodule\.([^.]+)\.path$/\1/')
+                url=$(git config -f .gitmodules --get "submodule.$name.url" || true)
+                if [ -z "$url" ]; then
+                  echo "Skipping submodule '$path' (no URL found in .gitmodules for name='$name')."
+                  continue
+                fi
+                echo "Initializing submodule '$path' (name='$name', url='$url')..."
+                git submodule update --init --recursive -- "$path" || {
+                  echo "Failed to init submodule at path: $path"
+                  exit 1
+                }
+              done
           else
-            echo "Dobby already present"
+            echo "No .gitmodules file present; nothing to init."
           fi
 
-          echo "Dobby contents:"
-          ls -la "$DOBBY_DIR"
+      - name: Ensure Dobby content is present (attempt init, then clone from .gitmodules url)
+        run: |
+          set -e -o pipefail
+          DPATH=app/src/main/cpp/extern/Dobby
+          echo "Checking for $DPATH/CMakeLists.txt ..."
+          if [ -f "$DPATH/CMakeLists.txt" ]; then
+            echo "Dobby already populated."
+            exit 0
+          fi
 
-      # --------------------------------------------------
-      # Java (required for Gradle / AGP)
-      # --------------------------------------------------
-      - name: Set up JDK 17
+          echo "Attempting git submodule update --init --recursive for Dobby..."
+          git submodule update --init --recursive -- "$DPATH" || echo "git submodule update returned non-zero (continuing to fallback attempts)"
+
+          if [ -f "$DPATH/CMakeLists.txt" ]; then
+            echo "Dobby initialized by submodule update."
+            exit 0
+          fi
+
+          echo "Submodule update did not populate Dobby. Attempting to find a URL in .gitmodules..."
+
+          if [ -f .gitmodules ]; then
+            # find submodule name whose path matches DPATH
+            name=$(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$' \
+              | awk -v p="$DPATH" '$2==p {print $1}' | sed -E 's/^submodule\.([^.]+)\.path$/\1/' || true)
+            if [ -n "$name" ]; then
+              url=$(git config -f .gitmodules --get "submodule.$name.url" || true)
+              echo "Found entry name='$name' url='$url'"
+              if [ -n "$url" ]; then
+                echo "Cloning $url into $DPATH..."
+                # remove placeholder and try to clone
+                rm -rf "$DPATH"
+                git clone --depth 1 "$url" "$DPATH" || echo "git clone failed (continuing)"
+              else
+                echo "No URL present for submodule '$name' in .gitmodules."
+              fi
+            else
+              echo "No .gitmodules entry matches path $DPATH"
+            fi
+          else
+            echo "No .gitmodules file present to read."
+          fi
+
+          if [ -f "$DPATH/CMakeLists.txt" ]; then
+            echo "Dobby successfully obtained."
+            exit 0
+          fi
+
+          echo ""
+          echo "ERROR: extern/Dobby/CMakeLists.txt still not found after attempts."
+          echo "Possible causes:"
+          echo " - .gitmodules lacks a URL for the Dobby submodule (CI cannot fetch it)."
+          echo " - Dobby is private and requires credentials (CI cannot access it without config)."
+          echo ""
+          echo "To fix (locally):"
+          echo "  git submodule add <Dobby-repo-url> app/src/main/cpp/extern/Dobby"
+          echo "  git add .gitmodules app/src/main/cpp/extern/Dobby"
+          echo "  git commit -m 'Add Dobby submodule'"
+          echo "  git push"
+          echo ""
+          echo "If the submodule is private, configure credentials for CI (SSH key or token) or vendor the Dobby sources into the repo."
+          exit 1
+
+      - name: Setup Java 17 (required for sdkmanager)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      # --------------------------------------------------
-      # Android SDK
-      # --------------------------------------------------
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK and CMake
+      - name: Prepare Android SDK root (runner temp)
         run: |
-          sdkmanager --install \
-            "platforms;android-${ANDROID_API_LEVEL}" \
-            "ndk;${ANDROID_NDK_VERSION}" \
-            "cmake;${CMAKE_VERSION}"
+          echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> $GITHUB_ENV
+          mkdir -p "$RUNNER_TEMP/android-sdk"
 
-      # --------------------------------------------------
-      # Gradle permission
-      # --------------------------------------------------
-      - name: Grant Gradle permissions
+      - name: Add Android SDK tool locations to PATH
+        run: |
+          echo "${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin" >> $GITHUB_PATH || true
+          echo "${{ env.ANDROID_SDK_ROOT }}/tools/bin" >> $GITHUB_PATH || true
+          echo "${{ env.ANDROID_SDK_ROOT }}/platform-tools" >> $GITHUB_PATH || true
+
+      - name: Install Android SDK commandline tools
+        uses: android-actions/setup-android@v2
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install platform, NDK and CMake
+        run: |
+          sdkmanager "platforms;android-${ANDROID_API_LEVEL}" \
+                    "build-tools;33.0.2" \
+                    "ndk;${ANDROID_NDK_VERSION}" \
+                    "cmake;${CMAKE_VERSION}" || true
+
+      - name: Show installed tools (debug)
+        run: |
+          java -version || true
+          "${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake" --version || true
+          ls -la "${ANDROID_SDK_ROOT}/ndk" || true
+          sdkmanager --list | sed -n '1,120p' || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-
+
+      - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # --------------------------------------------------
-      # Build arm64-v8a ONLY
-      # --------------------------------------------------
-      - name: Build native library
+      - name: Build (arm64-v8a)
         run: |
-          ./gradlew \
-            :app:externalNativeBuildRelease \
-            -Pandroid.injected.build.abi=arm64-v8a \
-            --no-daemon \
-            --stacktrace
+          ./gradlew :app:assembleRelease -Pandroid.injected.build.abi=arm64-v8a --no-daemon --no-parallel
 
-      # --------------------------------------------------
-      # Locate output
-      # --------------------------------------------------
-      - name: Locate libmoxxie.so
+      - name: Find built .so and copy -> libmoxxie.so
         run: |
-          echo "Searching for libmoxxie.so"
-          find app -name "libmoxxie.so" -type f
+          set -e
+          mkdir -p output
+          echo "Searching for .so for arm64-v8a..."
+          SO_PATH=$(find app -path "*/arm64-v8a/*" -type f -name "*.so" -print -quit || true)
+          if [ -z "$SO_PATH" ]; then
+            SO_PATH=$(find app/build -path "*/arm64-v8a/*" -type f -name "*.so" -print -quit || true)
+          fi
+          if [ -z "$SO_PATH" ]; then
+            SO_PATH=$(find app/build -path "*/merged_native_libs/*/out/lib/arm64-v8a/*" -type f -name "*.so" -print -quit || true)
+          fi
+          if [ -z "$SO_PATH" ]; then
+            echo "ERROR: could not find any .so for arm64-v8a. Listing likely places:"
+            find app -maxdepth 8 -type d -print
+            find app/build -type f -name "*.so" -print || true
+            exit 1
+          fi
+          echo "Found .so: $SO_PATH"
+          cp "$SO_PATH" "output/libmoxxie.so"
+          ls -la output
 
-      # --------------------------------------------------
-      # Upload artifact
-      # --------------------------------------------------
-      - name: Upload libmoxxie.so
+      - name: Upload libmoxxie.so artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libmoxxie-arm64-v8a
-          path: |
-            app/**/arm64-v8a/libmoxxie.so
+          name: libmoxxie.so
+          path: output/libmoxxie.so
