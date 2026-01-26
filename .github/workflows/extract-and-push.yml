@@ -3,7 +3,7 @@ name: Extract 7z and Push
 on:
   push:
     paths:
-      - 'bus temp.7z'
+      - 'HoldableTemplate.7z'
   workflow_dispatch:
 
 jobs:
