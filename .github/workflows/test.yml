@@ -1,0 +1,56 @@
+name: Extract 7z and Push
+
+on:
+  push:
+    paths:
+      - 'bus temp.7z'
+  workflow_dispatch:
+
+jobs:
+  extract-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout with PAT so we can push
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.Test }}
+          persist-credentials: true
+
+      # Install 7zip
+      - name: Install p7zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      # Extract archive
+      - name: Extract bus temp.7z
+        run: |
+          7z x "bus temp.7z" -o./
+
+      # Move HoldableTemplate contents to repo root
+      - name: Move HoldableTemplate contents to root
+        run: |
+          if [ -d "HoldableTemplate" ]; then
+            shopt -s dotglob
+            mv HoldableTemplate/* .
+            rm -rf HoldableTemplate
+          else
+            echo "HoldableTemplate folder not found"
+          fi
+
+      # Commit and push only if something changed
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A > /dev/null 2>&1
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Extract bus temp.7z and move HoldableTemplate to root"
+            git push
+          else
+            echo "No changes to commit"
+          fi
