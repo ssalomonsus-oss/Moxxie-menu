@@ -1,17 +1,28 @@
 cmake_minimum_required(VERSION 3.8...3.26)
 
-project("OVRStartGame")
+project(OVRStartGame)
 
+# ===============================
+# C++ standard
+# ===============================
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ===============================
+# Dobby options
+# ===============================
 macro(SET_OPTION option value)
     set(${option} ${value} CACHE INTERNAL "" FORCE)
 endmacro()
+
 SET_OPTION(DOBBY_DEBUG OFF)
 SET_OPTION(DOBBY_GENERATE_SHARED OFF)
+
 add_subdirectory(extern/Dobby dobby)
 
+# ===============================
+# Include directories
+# ===============================
 set(PUBLIC_INCLUDE_DIRS
         extern/BNM-Android/include
         extern/BNM-Android/external/include
@@ -24,8 +35,13 @@ set(INCLUDE_DIRS
         extern/BNM-Android/external/utf8
         extern/BNM-Android/src/private
         extern/Dobby/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/Include
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# ===============================
+# BNM static library
+# ===============================
 add_library(
         BNM
         STATIC
@@ -54,10 +70,16 @@ target_include_directories(
         ${INCLUDE_DIRS}
 )
 
-set_property(TARGET BNM PROPERTY BNM_INCLUDE_DIRECTORIES ${PUBLIC_INCLUDE_DIRS})
+set_property(
+        TARGET BNM
+        PROPERTY BNM_INCLUDE_DIRECTORIES ${PUBLIC_INCLUDE_DIRS}
+)
 
-
-add_library(${CMAKE_PROJECT_NAME}
+# ===============================
+# Main shared library
+# ===============================
+add_library(
+        ${CMAKE_PROJECT_NAME}
         SHARED
         native-lib.cpp
         Include/XRInput.cpp
@@ -70,10 +92,12 @@ target_include_directories(
         ${CMAKE_PROJECT_NAME}
         PUBLIC
         ${INCLUDE_DIRS}
-        Include
         ${CMAKE_CURRENT_SOURCE_DIR}/extern/OpenSSL/${ANDROID_ABI}/include
 )
 
+# ===============================
+# Linking
+# ===============================
 target_link_libraries(
         ${CMAKE_PROJECT_NAME}
         PUBLIC
